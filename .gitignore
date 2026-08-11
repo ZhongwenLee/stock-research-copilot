@@ -1,0 +1,48 @@
+# Global ignore rules for the monorepo
+
+# Operating systems
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors and IDEs
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Logs and local runtime files
+*.log
+*.pid
+*.seed
+*.out
+*.err
+*.local
+.env
+.env.*
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+frontend/.cache/
+frontend/*.tsbuildinfo
+
+# Backend
+backend/target/
+backend/.cache/
+backend/data/
+
+# Local infra volumes
+infra/mysql/data/
+infra/redis/data/
+
+# Uploaded research files
+data/uploads/
+
+# Build artifacts
+*.class
+*.jar
+*.war
+*.ear
