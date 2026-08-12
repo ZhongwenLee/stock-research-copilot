@@ -32,7 +32,9 @@ public class GlobalExceptionHandler {
 			ConstraintViolationException.class,
 			MethodArgumentTypeMismatchException.class,
 			HttpMessageNotReadableException.class,
-			IllegalArgumentException.class
+			IllegalArgumentException.class,
+			org.springframework.web.multipart.MaxUploadSizeExceededException.class,
+			org.springframework.web.multipart.MultipartException.class
 	})
 	public ApiResponse<Void> handleValidationException(Exception ex, HttpServletRequest request) {
 		String message = resolveValidationMessage(ex);

@@ -63,15 +63,34 @@ knife4j:
     language: zh_cn
 
 app:
-  file-storage-path: ${FILE_STORAGE_PATH:./data/uploads}
+  file-storage:
+    path: ${FILE_STORAGE_PATH:./data/uploads}
+    max-file-size-bytes: ${FILE_MAX_SIZE_BYTES:52428800}
+    allowed-extensions:
+      - pdf
+      - docx
+      - txt
+      - html
+      - htm
+  ingest:
+    async-enabled: true
+    chunk-max-chars: 800
+    chunk-overlap-chars: 100
+    embedding-batch-size: 16
+    embedding-max-retries: 3
   ai:
     api-key: ${AI_API_KEY:}
     base-url: ${AI_BASE_URL:https://api.openai.com/v1}
     chat-model: ${AI_CHAT_MODEL:gpt-4o-mini}
     embedding-model: ${AI_EMBEDDING_MODEL:text-embedding-3-small}
+    embedding-dimensions: ${AI_EMBEDDING_DIMENSIONS:1536}
+  vector:
+    provider: ${VECTOR_PROVIDER:memory}
   milvus:
+    enabled: ${MILVUS_ENABLED:false}
     host: ${MILVUS_HOST:127.0.0.1}
     port: ${MILVUS_PORT:19530}
+    collection: ${MILVUS_COLLECTION:document_chunks}
 
 logging:
   pattern:
