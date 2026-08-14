@@ -59,6 +59,7 @@
 - 文档：`http://localhost:8080/doc.html`
 - 健康检查：`GET /api/v1/health`
 - 文档入库接口：见 [document-ingest-api.md](document-ingest-api.md)
+- 问答接口：见 [qa-api.md](qa-api.md)
 
 ## 5. 后端实现位置
 

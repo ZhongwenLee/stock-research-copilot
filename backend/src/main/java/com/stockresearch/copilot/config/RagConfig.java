@@ -3,6 +3,9 @@ package com.stockresearch.copilot.config;
 import com.stockresearch.copilot.rag.embedding.EmbeddingClient;
 import com.stockresearch.copilot.rag.embedding.OpenAiCompatibleEmbeddingClient;
 import com.stockresearch.copilot.rag.embedding.StubEmbeddingClient;
+import com.stockresearch.copilot.rag.llm.ChatClient;
+import com.stockresearch.copilot.rag.llm.OpenAiCompatibleChatClient;
+import com.stockresearch.copilot.rag.llm.StubChatClient;
 import com.stockresearch.copilot.rag.vector.InMemoryVectorStore;
 import com.stockresearch.copilot.rag.vector.MilvusVectorStore;
 import com.stockresearch.copilot.rag.vector.VectorStore;
@@ -24,18 +27,35 @@ public class RagConfig {
 	private final AppProperties appProperties;
 
 	@Bean
-	public EmbeddingClient embeddingClient() {
+	public RestClient aiRestClient() {
+		return RestClient.builder()
+				.baseUrl(trimTrailingSlash(appProperties.getAi().getBaseUrl()))
+				.defaultHeader("Authorization", "Bearer "
+						+ (StringUtils.hasText(appProperties.getAi().getApiKey())
+						? appProperties.getAi().getApiKey()
+						: "unused"))
+				.requestFactory(requestFactory())
+				.build();
+	}
+
+	@Bean
+	public EmbeddingClient embeddingClient(RestClient aiRestClient) {
 		if (!StringUtils.hasText(appProperties.getAi().getApiKey())) {
 			log.warn("AI_API_KEY is empty, using StubEmbeddingClient");
 			return new StubEmbeddingClient(appProperties);
 		}
-		RestClient restClient = RestClient.builder()
-				.baseUrl(trimTrailingSlash(appProperties.getAi().getBaseUrl()))
-				.defaultHeader("Authorization", "Bearer " + appProperties.getAi().getApiKey())
-				.requestFactory(requestFactory())
-				.build();
 		log.info("using OpenAiCompatibleEmbeddingClient model={}", appProperties.getAi().getEmbeddingModel());
-		return new OpenAiCompatibleEmbeddingClient(appProperties, restClient);
+		return new OpenAiCompatibleEmbeddingClient(appProperties, aiRestClient);
+	}
+
+	@Bean
+	public ChatClient chatClient(RestClient aiRestClient) {
+		if (!StringUtils.hasText(appProperties.getAi().getApiKey())) {
+			log.warn("AI_API_KEY is empty, using StubChatClient");
+			return new StubChatClient();
+		}
+		log.info("using OpenAiCompatibleChatClient model={}", appProperties.getAi().getChatModel());
+		return new OpenAiCompatibleChatClient(appProperties, aiRestClient);
 	}
 
 	@Bean
@@ -54,7 +74,7 @@ public class RagConfig {
 
 	private JdkClientHttpRequestFactory requestFactory() {
 		JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory();
-		factory.setReadTimeout(Duration.ofSeconds(60));
+		factory.setReadTimeout(Duration.ofSeconds(90));
 		return factory;
 	}
 

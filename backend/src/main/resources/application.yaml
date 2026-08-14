@@ -30,6 +30,10 @@ server:
   port: ${SERVER_PORT:8080}
   servlet:
     context-path: /
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
 
 mybatis-plus:
   configuration:
@@ -91,6 +95,11 @@ app:
     host: ${MILVUS_HOST:127.0.0.1}
     port: ${MILVUS_PORT:19530}
     collection: ${MILVUS_COLLECTION:document_chunks}
+  qa:
+    recall-top-k: ${QA_RECALL_TOP_K:20}
+    rerank-top-k: ${QA_RERANK_TOP_K:8}
+    max-context-chars: ${QA_MAX_CONTEXT_CHARS:6000}
+    quote-max-chars: ${QA_QUOTE_MAX_CHARS:240}
 
 logging:
   pattern:

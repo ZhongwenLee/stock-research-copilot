@@ -6,6 +6,7 @@ import com.stockresearch.copilot.common.exception.ErrorCode;
 import com.stockresearch.copilot.config.AppProperties;
 import io.milvus.client.MilvusServiceClient;
 import io.milvus.grpc.DataType;
+import io.milvus.grpc.SearchResults;
 import io.milvus.param.ConnectParam;
 import io.milvus.param.IndexType;
 import io.milvus.param.MetricType;
@@ -17,12 +18,15 @@ import io.milvus.param.collection.HasCollectionParam;
 import io.milvus.param.collection.LoadCollectionParam;
 import io.milvus.param.dml.DeleteParam;
 import io.milvus.param.dml.InsertParam;
+import io.milvus.param.dml.SearchParam;
 import io.milvus.param.index.CreateIndexParam;
+import io.milvus.response.SearchResultsWrapper;
 import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Slf4j
 public class MilvusVectorStore implements VectorStore {
@@ -92,6 +96,74 @@ public class MilvusVectorStore implements VectorStore {
 				.withExpr(expr)
 				.build());
 		assertSuccess(response, "milvus delete failed");
+	}
+
+	@Override
+	public List<VectorSearchHit> search(float[] queryEmbedding, VectorSearchFilter filter, int topK) {
+		if (queryEmbedding == null || queryEmbedding.length == 0 || topK <= 0) {
+			return List.of();
+		}
+		List<Float> vector = new ArrayList<>(queryEmbedding.length);
+		for (float value : queryEmbedding) {
+			vector.add(value);
+		}
+
+		SearchParam.Builder builder = SearchParam.newBuilder()
+				.withCollectionName(appProperties.getMilvus().getCollection())
+				.withMetricType(MetricType.COSINE)
+				.withTopK(topK)
+				.withVectors(List.of(vector))
+				.withVectorFieldName(FIELD_EMBEDDING)
+				.withOutFields(List.of(FIELD_ID, FIELD_CHUNK_ID, FIELD_DOCUMENT_ID, FIELD_COMPANY_ID));
+
+		String expr = buildFilterExpr(filter);
+		if (expr != null && !expr.isBlank()) {
+			builder.withExpr(expr);
+		}
+
+		R<SearchResults> response = client.search(builder.build());
+		assertSuccess(response, "milvus search failed");
+		if (response.getData() == null) {
+			return List.of();
+		}
+
+		SearchResultsWrapper wrapper = new SearchResultsWrapper(response.getData().getResults());
+		List<SearchResultsWrapper.IDScore> scores = wrapper.getIDScore(0);
+		List<VectorSearchHit> hits = new ArrayList<>(scores.size());
+		for (int i = 0; i < scores.size(); i++) {
+			SearchResultsWrapper.IDScore idScore = scores.get(i);
+			Long chunkId = (Long) wrapper.getFieldData(FIELD_CHUNK_ID, 0).get(i);
+			Long documentId = (Long) wrapper.getFieldData(FIELD_DOCUMENT_ID, 0).get(i);
+			Long companyId = (Long) wrapper.getFieldData(FIELD_COMPANY_ID, 0).get(i);
+			hits.add(VectorSearchHit.builder()
+					.vectorId(String.valueOf(idScore.getStrID()))
+					.chunkId(chunkId)
+					.documentId(documentId)
+					.companyId(companyId)
+					.score(idScore.getScore())
+					.build());
+		}
+		return hits;
+	}
+
+	private String buildFilterExpr(VectorSearchFilter filter) {
+		if (filter == null) {
+			return null;
+		}
+		List<String> parts = new ArrayList<>();
+		if (filter.getCompanyId() != null) {
+			parts.add(FIELD_COMPANY_ID + " == " + filter.getCompanyId());
+		}
+		if (filter.getDocumentIds() != null && !filter.getDocumentIds().isEmpty()) {
+			String joined = filter.getDocumentIds().stream()
+					.map(String::valueOf)
+					.collect(Collectors.joining(", "));
+			parts.add(FIELD_DOCUMENT_ID + " in [" + joined + "]");
+		}
+		if (parts.isEmpty()) {
+			return null;
+		}
+		return String.join(" && ", parts);
 	}
 
 	private void ensureCollection() {

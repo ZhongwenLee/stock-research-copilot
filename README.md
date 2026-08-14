@@ -125,6 +125,7 @@ stock-research-copilot/
 - [技术方案与环境约定](docs/tech-stack.md)
 - [接口规范](docs/api-convention.md)
 - [文档入库接口](docs/document-ingest-api.md)
+- [问答接口](docs/qa-api.md)
 - [本地基础设施](infra/README.md)
 
 ### 后端目录示例

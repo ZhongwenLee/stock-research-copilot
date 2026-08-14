@@ -15,6 +15,7 @@ public class AppProperties {
 	private Ai ai = new Ai();
 	private Vector vector = new Vector();
 	private Milvus milvus = new Milvus();
+	private Qa qa = new Qa();
 
 	@Data
 	public static class FileStorage {
@@ -53,5 +54,17 @@ public class AppProperties {
 		private String host = "127.0.0.1";
 		private int port = 19530;
 		private String collection = "document_chunks";
+	}
+
+	@Data
+	public static class Qa {
+		/** Candidate size before rerank. */
+		private int recallTopK = 20;
+		/** Final chunks after rerank. */
+		private int rerankTopK = 8;
+		/** Max chars packed into LLM context. */
+		private int maxContextChars = 6000;
+		/** Quote excerpt length for citations. */
+		private int quoteMaxChars = 240;
 	}
 }
