@@ -27,4 +27,13 @@ public class QaAskRequest {
 
 	/** Reserved for multi-turn; ignored in Step 3. */
 	private String conversationId;
+
+	/** Summary mode hint for Step 4: FAST or DEEP. */
+	private String summaryMode;
+
+	/** Optional explicit time range start in yyyy-MM-dd. */
+	private String startDate;
+
+	/** Optional explicit time range end in yyyy-MM-dd. */
+	private String endDate;
 }

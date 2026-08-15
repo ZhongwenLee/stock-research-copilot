@@ -48,6 +48,13 @@ export interface Citation {
   section?: string
 }
 
+export interface SummarySection {
+  title: string
+  content: string
+  charCount?: number
+  citationCount?: number
+}
+
 export interface QaAskRequest {
   question: string
   companyId?: number | null
@@ -55,6 +62,9 @@ export interface QaAskRequest {
   docTypes?: string[]
   topK?: number
   conversationId?: string | null
+  summaryMode?: string | null
+  startDate?: string | null
+  endDate?: string | null
 }
 
 export interface QaAnswer {
@@ -70,4 +80,22 @@ export interface QaAnswer {
   citations: Citation[]
   chunks: DocumentChunk[]
   latencyMs: number
+}
+
+export interface SummaryAnswer {
+  summaryId: number
+  companyId: number
+  companyName?: string
+  stockCode?: string
+  mode: string
+  title: string
+  overview: string
+  sections: SummarySection[]
+  citations: Citation[]
+  chunks: DocumentChunk[]
+  docTypes?: string[]
+  startDate?: string | null
+  endDate?: string | null
+  latencyMs: number
+  insufficientEvidence: boolean
 }
