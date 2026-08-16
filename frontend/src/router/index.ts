@@ -32,6 +32,12 @@ const router = createRouter({
           component: () => import('@/views/SummaryView.vue'),
           meta: { title: '研究摘要' },
         },
+        {
+          path: 'agent',
+          name: 'agent',
+          component: () => import('@/views/AgentView.vue'),
+          meta: { title: 'Agent' },
+        },
       ],
     },
   ],

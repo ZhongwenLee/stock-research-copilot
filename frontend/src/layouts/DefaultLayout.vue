@@ -45,6 +45,7 @@ const navItems = [
   { to: '/documents', label: '文档管理' },
   { to: '/qa', label: '研究问答' },
   { to: '/summary', label: '研究摘要' },
+  { to: '/agent', label: 'Agent' },
 ]
 
 const pageTitle = computed(() => {

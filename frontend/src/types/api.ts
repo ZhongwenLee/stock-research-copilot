@@ -99,3 +99,26 @@ export interface SummaryAnswer {
   latencyMs: number
   insufficientEvidence: boolean
 }
+
+export interface AgentStep {
+  name: string
+  tool: string
+  status: string
+  note?: string
+  latencyMs?: number
+}
+
+export interface AgentAnswer {
+  intentType: string
+  question: string
+  answer: string
+  companyId?: number
+  companyName?: string
+  stockCode?: string
+  preferredDocTypes?: string[]
+  steps: AgentStep[]
+  citations: Citation[]
+  chunks: DocumentChunk[]
+  latencyMs: number
+  insufficientEvidence: boolean
+}
