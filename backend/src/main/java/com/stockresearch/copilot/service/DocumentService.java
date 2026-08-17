@@ -3,6 +3,7 @@ package com.stockresearch.copilot.service;
 import com.stockresearch.copilot.common.result.PageResult;
 import com.stockresearch.copilot.dto.DocumentQueryRequest;
 import com.stockresearch.copilot.vo.DocumentVO;
+import org.springframework.core.io.Resource;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
@@ -16,4 +17,6 @@ public interface DocumentService {
 	PageResult<DocumentVO> page(DocumentQueryRequest request);
 
 	DocumentVO reprocess(Long id);
+
+	Resource openFile(Long id);
 }

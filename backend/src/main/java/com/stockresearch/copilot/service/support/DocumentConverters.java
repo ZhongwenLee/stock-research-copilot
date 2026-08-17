@@ -22,6 +22,7 @@ public final class DocumentConverters {
 				.publishDate(document.getPublishDate())
 				.processStatus(document.getProcessStatus())
 				.errorMessage(document.getErrorMessage())
+				.storagePath(document.getStoragePath())
 				.createdAt(document.getCreatedAt())
 				.updatedAt(document.getUpdatedAt())
 				.build();

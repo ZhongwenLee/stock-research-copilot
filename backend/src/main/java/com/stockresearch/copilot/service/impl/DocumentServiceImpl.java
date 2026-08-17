@@ -23,6 +23,8 @@ import com.stockresearch.copilot.service.support.DocumentConverters;
 import com.stockresearch.copilot.vo.DocumentVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -30,6 +32,8 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -94,8 +98,11 @@ public class DocumentServiceImpl implements DocumentService {
 				.eq(StringUtils.hasText(request.getDocType()), Document::getDocType, request.getDocType())
 				.eq(StringUtils.hasText(request.getProcessStatus()), Document::getProcessStatus,
 						request.getProcessStatus())
+				.ge(request.getStartDate() != null, Document::getPublishDate, request.getStartDate())
+				.le(request.getEndDate() != null, Document::getPublishDate, request.getEndDate())
+				.like(StringUtils.hasText(request.getKeyword()), Document::getTitle, request.getKeyword())
 				.orderByDesc(Document::getId);
-		Page<Document> result = documentMapper.selectPage(page, wrapper);
+			Page<Document> result = documentMapper.selectPage(page, wrapper);
 		List<DocumentVO> records = result.getRecords().stream().map(DocumentConverters::toDocumentVO).toList();
 		return PageResult.of(records, result.getTotal(), result.getCurrent(), result.getSize());
 	}
@@ -109,6 +116,21 @@ public class DocumentServiceImpl implements DocumentService {
 		documentMapper.updateById(document);
 		triggerIngest(id);
 		return DocumentConverters.toDocumentVO(documentMapper.selectById(id));
+	}
+
+	@Override
+	public Resource openFile(Long id) {
+		Document document = requireDocument(id);
+		if (!StringUtils.hasText(document.getStoragePath())) {
+			throw new BizException(ErrorCode.NOT_FOUND, "document file not found: " + id);
+		}
+		Path path = fileStorageService.resolve(document.getStoragePath());
+		try {
+			return new UrlResource(path.toUri());
+		}
+		catch (Exception ex) {
+			throw new BizException(ErrorCode.INTERNAL_ERROR, "failed to open document file: " + ex.getMessage());
+		}
 	}
 
 	private void triggerIngest(Long documentId) {

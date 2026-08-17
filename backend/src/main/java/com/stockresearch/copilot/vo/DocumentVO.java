@@ -20,6 +20,7 @@ public class DocumentVO {
 	private LocalDate publishDate;
 	private String processStatus;
 	private String errorMessage;
+	private String storagePath;
 	private LocalDateTime createdAt;
 	private LocalDateTime updatedAt;
 }

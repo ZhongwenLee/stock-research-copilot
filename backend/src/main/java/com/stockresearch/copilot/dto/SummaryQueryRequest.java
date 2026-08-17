@@ -9,19 +9,17 @@ import java.time.LocalDate;
 
 @Data
 @EqualsAndHashCode(callSuper = true)
-public class DocumentQueryRequest extends PageQuery {
+public class SummaryQueryRequest extends PageQuery {
 
 	private Long companyId;
 
-	private String docType;
+	private String mode;
 
-	private String processStatus;
+	private String keyword;
 
 	@DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
 	private LocalDate startDate;
 
 	@DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
 	private LocalDate endDate;
-
-	private String keyword;
 }

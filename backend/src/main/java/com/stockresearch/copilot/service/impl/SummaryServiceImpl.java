@@ -1,10 +1,12 @@
 package com.stockresearch.copilot.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.stockresearch.copilot.common.enums.CitationRefType;
 import com.stockresearch.copilot.common.enums.SummaryMode;
 import com.stockresearch.copilot.config.AppProperties;
 import com.stockresearch.copilot.dto.SummaryGenerateRequest;
+import com.stockresearch.copilot.dto.SummaryQueryRequest;
 import com.stockresearch.copilot.entity.Citation;
 import com.stockresearch.copilot.entity.Company;
 import com.stockresearch.copilot.entity.Document;
@@ -26,6 +28,7 @@ import com.stockresearch.copilot.service.support.DocumentConverters;
 import com.stockresearch.copilot.vo.CitationVO;
 import com.stockresearch.copilot.vo.DocumentChunkVO;
 import com.stockresearch.copilot.vo.SummaryAnswerVO;
+import com.stockresearch.copilot.vo.SummaryHistoryVO;
 import com.stockresearch.copilot.vo.SummarySectionVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -131,6 +134,55 @@ public class SummaryServiceImpl implements SummaryService {
 				.endDate(request.getEndDate())
 				.latencyMs(latency)
 				.insufficientEvidence(insufficient)
+				.build();
+	}
+
+	@Override
+	public com.stockresearch.copilot.common.result.PageResult<SummaryHistoryVO> history(SummaryQueryRequest request) {
+		Page<Summary> page = new Page<>(request.getPageNum(), request.getPageSize());
+		LambdaQueryWrapper<Summary> wrapper = new LambdaQueryWrapper<>();
+		wrapper.eq(request.getCompanyId() != null, Summary::getCompanyId, request.getCompanyId())
+				.eq(StringUtils.hasText(request.getMode()), Summary::getMode, request.getMode())
+				.ge(request.getStartDate() != null, Summary::getStartDate, request.getStartDate())
+				.le(request.getEndDate() != null, Summary::getEndDate, request.getEndDate())
+				.like(StringUtils.hasText(request.getKeyword()), Summary::getTitle, request.getKeyword())
+				.orderByDesc(Summary::getId);
+		Page<Summary> result = summaryMapper.selectPage(page, wrapper);
+		List<SummaryHistoryVO> records = result.getRecords().stream()
+				.map(this::toHistoryVO)
+				.toList();
+		return com.stockresearch.copilot.common.result.PageResult.of(records, result.getTotal(), result.getCurrent(), result.getSize());
+	}
+
+	@Override
+	public SummaryHistoryVO getHistoryById(Long summaryId) {
+		Summary summary = summaryMapper.selectById(summaryId);
+		if (summary == null) {
+			throw new IllegalArgumentException("summary not found: " + summaryId);
+		}
+		return toHistoryVO(summary);
+	}
+
+	private SummaryHistoryVO toHistoryVO(Summary summary) {
+		Company company = summary.getCompanyId() == null ? null : companyMapper.selectById(summary.getCompanyId());
+		long citationCount = citationMapper.selectCount(new LambdaQueryWrapper<Citation>()
+				.eq(Citation::getRefType, CitationRefType.SUMMARY.name())
+				.eq(Citation::getRefId, summary.getId()));
+		return SummaryHistoryVO.builder()
+				.summaryId(summary.getId())
+				.companyId(summary.getCompanyId())
+				.companyName(company == null ? null : company.getName())
+				.stockCode(summary.getStockCode())
+				.mode(summary.getMode())
+				.title(summary.getTitle())
+				.overview(summary.getOverview())
+				.docTypes(parseJsonArray(summary.getDocTypesJson()))
+				.startDate(summary.getStartDate())
+				.endDate(summary.getEndDate())
+				.latencyMs(summary.getLatencyMs())
+				.insufficientEvidence(containsInsufficientSignal(summary.getOverview()))
+				.citationCount((int) citationCount)
+				.createdAt(summary.getCreatedAt())
 				.build();
 	}
 
@@ -354,6 +406,32 @@ public class SummaryServiceImpl implements SummaryService {
 		String lower = answer.toLowerCase(Locale.ROOT);
 		return lower.contains("依据不足") || lower.contains("不足以") || lower.contains("无法判断")
 				|| lower.contains("insufficient");
+	}
+
+	private List<String> parseJsonArray(String json) {
+		if (!StringUtils.hasText(json)) {
+			return List.of();
+		}
+		String trimmed = json.trim();
+		if (trimmed.length() < 2) {
+			return List.of(trimmed);
+		}
+		String body = trimmed.substring(1, trimmed.length() - 1).trim();
+		if (!StringUtils.hasText(body)) {
+			return List.of();
+		}
+		String[] parts = body.split(",");
+		List<String> result = new ArrayList<>();
+		for (String part : parts) {
+			String item = part.trim();
+			if (item.startsWith("\"") && item.endsWith("\"") && item.length() >= 2) {
+				item = item.substring(1, item.length() - 1);
+			}
+			if (StringUtils.hasText(item)) {
+				result.add(item);
+			}
+		}
+		return result;
 	}
 
 	private String writeJson(Object value) {

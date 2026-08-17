@@ -71,6 +71,24 @@
       <p v-if="error" class="error">{{ error }}</p>
     </div>
 
+    <div class="panel history-toolbar">
+      <div>
+        <h3>历史摘要</h3>
+        <p class="hint">可刷新最近 5 条摘要记录。</p>
+      </div>
+      <button class="secondary" type="button" @click="loadHistory">刷新历史</button>
+    </div>
+
+    <div v-if="history.length" class="panel history-panel">
+      <div v-for="item in history" :key="item.summaryId" class="history-item" @click="openHistory(item.summaryId)">
+        <div>
+          <strong>{{ item.companyName }}</strong>
+          <span>{{ item.mode }} · {{ item.latencyMs }}ms · {{ item.citationCount || 0 }} 引用</span>
+        </div>
+        <p>{{ item.overview }}</p>
+      </div>
+    </div>
+
     <div v-if="latest" class="results">
       <section class="panel overview-panel">
         <div class="section-head">
@@ -101,13 +119,17 @@
       <section class="panel citations-panel">
         <h3>引用来源</h3>
         <p v-if="!latest.citations?.length" class="empty">暂无引用</p>
-        <article v-for="cite in latest.citations" :key="`${cite.chunkId}-${cite.rankNo}`" class="cite">
+        <article v-for="cite in latest.citations" :key="`${cite.chunkId}-${cite.rankNo}`" class="cite" :id="`summary-cite-${cite.chunkId}`">
           <header>
             <strong>[{{ cite.rankNo }}]</strong>
-            <span>{{ cite.documentTitle || `文档 #${cite.documentId}` }}</span>
+            <button class="link-button" type="button" @click="focusChunk(cite.chunkId)">
+              {{ cite.documentTitle || `文档 #${cite.documentId}` }}
+            </button>
             <span v-if="cite.docType" class="tag">{{ docTypeLabel(cite.docType) }}</span>
           </header>
-          <p v-if="cite.titlePath" class="path">{{ cite.titlePath }}<span v-if="cite.pageNo"> · p.{{ cite.pageNo }}</span></p>
+          <p v-if="cite.titlePath" class="path">
+            {{ cite.titlePath }}<span v-if="cite.pageNo"> · p.{{ cite.pageNo }}</span>
+          </p>
           <p class="quote">{{ cite.quoteText }}</p>
         </article>
       </section>
@@ -115,7 +137,7 @@
       <section class="panel chunks-panel">
         <h3>检索片段</h3>
         <p v-if="!latest.chunks?.length" class="empty">暂无片段</p>
-        <article v-for="chunk in latest.chunks" :key="chunk.id" class="chunk">
+        <article v-for="chunk in latest.chunks" :key="chunk.id" class="chunk" :id="`summary-chunk-${chunk.id}`">
           <header>
             <strong>#{{ chunk.id }}</strong>
             <span>{{ chunk.titlePath || chunk.section || '未命名片段' }}</span>
@@ -124,17 +146,6 @@
         </article>
       </section>
     </div>
-
-    <div v-if="history.length" class="panel history-panel">
-      <h3>最近生成记录</h3>
-      <div v-for="item in history" :key="item.summaryId" class="history-item">
-        <div>
-          <strong>{{ item.companyName }}</strong>
-          <span>{{ item.mode }} · {{ item.latencyMs }}ms</span>
-        </div>
-        <p>{{ item.overview }}</p>
-      </div>
-    </div>
   </section>
 </template>
 
@@ -142,7 +153,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { listCompanies } from '@/api/qa'
 import { generateSummary } from '@/api/summary'
-import type { Company, SummaryAnswer } from '@/types/api'
+import { getSummaryHistory, listSummaryHistory } from '@/api/history'
+import type { Company, SummaryAnswer, SummaryHistoryItem } from '@/types/api'
 
 const companies = ref<Company[]>([])
 const companyId = ref('')
@@ -153,19 +165,33 @@ const startDate = ref('')
 const endDate = ref('')
 const loading = ref(false)
 const error = ref('')
-const history = ref<SummaryAnswer[]>([])
+const history = ref<SummaryHistoryItem[]>([])
 const latest = ref<SummaryAnswer | null>(null)
 
 const modeLabel = computed(() => (mode.value === 'DEEP' ? '深度摘要' : '极速摘要'))
 
 onMounted(async () => {
+  await Promise.all([loadCompanies(), loadHistory()])
+})
+
+async function loadCompanies() {
   try {
     companies.value = await listCompanies()
   }
   catch (e) {
     error.value = e instanceof Error ? e.message : '加载公司列表失败'
   }
-})
+}
+
+async function loadHistory() {
+  try {
+    const result = await listSummaryHistory({ pageNum: 1, pageSize: 5 })
+    history.value = result.records
+  }
+  catch (e) {
+    error.value = e instanceof Error ? e.message : '加载摘要历史失败'
+  }
+}
 
 async function submit() {
   if (!companyId.value || loading.value) {
@@ -182,8 +208,8 @@ async function submit() {
       startDate: startDate.value || undefined,
       endDate: endDate.value || undefined,
     })
-    history.value = [result, ...history.value].slice(0, 5)
     latest.value = result
+    await loadHistory()
   }
   catch (e) {
     error.value = e instanceof Error ? e.message : '生成摘要失败'
@@ -191,6 +217,19 @@ async function submit() {
   finally {
     loading.value = false
   }
+}
+
+async function openHistory(summaryId: number) {
+  try {
+    latest.value = await getSummaryHistory(summaryId)
+  }
+  catch (e) {
+    error.value = e instanceof Error ? e.message : '加载摘要详情失败'
+  }
+}
+
+function focusChunk(chunkId: number) {
+  document.getElementById(`summary-chunk-${chunkId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function docTypeLabel(type: string) {
@@ -289,15 +328,18 @@ input {
   padding: 12px 14px;
 }
 
-.actions {
-  margin-top: 16px;
+.actions,
+.section-head,
+.history-toolbar {
   display: flex;
-  gap: 14px;
   align-items: center;
+  gap: 14px;
   flex-wrap: wrap;
+  justify-content: space-between;
 }
 
-.primary {
+.primary,
+.secondary {
   border: 0;
   border-radius: 999px;
   padding: 10px 20px;
@@ -307,9 +349,31 @@ input {
   cursor: pointer;
 }
 
-.primary:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
+.secondary {
+  background: rgba(15, 23, 42, 0.72);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.history-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.history-item {
+  border-top: 1px solid var(--border);
+  padding: 14px 0;
+  cursor: pointer;
+}
+
+.history-item > div,
+.section-card header,
+.cite header,
+.chunk header {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 
 .results {
@@ -321,22 +385,12 @@ input {
 .overview-panel,
 .sections-panel,
 .citations-panel,
-.chunks-panel,
-.history-panel {
+.chunks-panel {
   min-width: 0;
 }
 
-.overview-panel,
-.history-panel {
+.overview-panel {
   grid-column: 1 / -1;
-}
-
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-  flex-wrap: wrap;
 }
 
 .meta-pills {
@@ -345,17 +399,26 @@ input {
   flex-wrap: wrap;
 }
 
-.pill {
+.pill,
+.tag {
   border-radius: 999px;
   padding: 4px 10px;
+  font-size: 0.78rem;
+}
+
+.pill {
   background: rgba(125, 211, 252, 0.12);
   color: #7dd3fc;
-  font-size: 0.78rem;
 }
 
 .pill.danger {
   background: rgba(248, 113, 113, 0.15);
   color: #fca5a5;
+}
+
+.tag {
+  background: #7dd3fc;
+  color: #081120;
 }
 
 .section-card,
@@ -365,22 +428,13 @@ input {
   padding: 14px 0;
 }
 
-.section-card header,
-.cite header,
-.chunk header,
-.history-item > div {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.tag {
-  font-size: 0.75rem;
-  color: #081120;
-  background: #7dd3fc;
-  border-radius: 999px;
-  padding: 2px 8px;
+.link-button {
+  border: 0;
+  background: transparent;
+  color: #7dd3fc;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
 }
 
 .quote,
@@ -390,11 +444,6 @@ input {
 .overview {
   white-space: pre-wrap;
   margin: 8px 0 0;
-}
-
-.history-item {
-  border-top: 1px solid var(--border);
-  padding: 14px 0;
 }
 
 @media (max-width: 1080px) {

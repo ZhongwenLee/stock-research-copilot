@@ -76,7 +76,7 @@
         <button class="primary" type="button" :disabled="loading || !question.trim()" @click="submit">
           {{ loading ? '执行中…' : '启动 Agent' }}
         </button>
-        <p class="hint">Ctrl + Enter 发送。页面会展示路由结果、步骤和最终回答。</p>
+        <p class="hint">Ctrl + Enter 发送。引用可点击跳转到对应片段。</p>
       </div>
 
       <p v-if="error" class="error">{{ error }}</p>
@@ -118,10 +118,14 @@
         <article v-for="cite in latest.citations" :key="`${cite.chunkId}-${cite.rankNo}`" class="cite">
           <header>
             <strong>[{{ cite.rankNo }}]</strong>
-            <span>{{ cite.documentTitle || `文档 #${cite.documentId}` }}</span>
+            <button class="link-button" type="button" @click="focusChunk(cite.chunkId)">
+              {{ cite.documentTitle || `文档 #${cite.documentId}` }}
+            </button>
             <span v-if="cite.docType" class="tag">{{ docTypeLabel(cite.docType) }}</span>
           </header>
-          <p v-if="cite.titlePath" class="path">{{ cite.titlePath }}<span v-if="cite.pageNo"> · p.{{ cite.pageNo }}</span></p>
+          <p v-if="cite.titlePath" class="path">
+            {{ cite.titlePath }}<span v-if="cite.pageNo"> · p.{{ cite.pageNo }}</span>
+          </p>
           <p class="quote">{{ cite.quoteText }}</p>
         </article>
       </section>
@@ -129,7 +133,7 @@
       <section class="panel chunks-panel">
         <h3>检索片段</h3>
         <p v-if="!latest.chunks?.length" class="empty">暂无片段</p>
-        <article v-for="chunk in latest.chunks" :key="chunk.id" class="chunk">
+        <article v-for="chunk in latest.chunks" :key="chunk.id" class="chunk" :id="`agent-chunk-${chunk.id}`">
           <header>
             <strong>#{{ chunk.id }}</strong>
             <span>{{ chunk.titlePath || chunk.section || '未命名片段' }}</span>
@@ -137,17 +141,6 @@
           <p>{{ chunk.content }}</p>
         </article>
       </section>
-    </div>
-
-    <div v-if="history.length" class="panel history-panel">
-      <h3>最近执行记录</h3>
-      <div v-for="item in history" :key="`${item.question}-${item.latencyMs}`" class="history-item">
-        <div>
-          <strong>{{ item.companyName || '未识别公司' }}</strong>
-          <span>{{ item.intentType }} · {{ item.latencyMs }}ms</span>
-        </div>
-        <p>{{ item.answer }}</p>
-      </div>
     </div>
   </section>
 </template>
@@ -168,7 +161,6 @@ const endDate = ref('')
 const question = ref('')
 const loading = ref(false)
 const error = ref('')
-const history = ref<AgentAnswer[]>([])
 const latest = ref<AgentAnswer | null>(null)
 
 onMounted(async () => {
@@ -196,8 +188,8 @@ async function submit() {
       startDate: startDate.value || undefined,
       endDate: endDate.value || undefined,
     })
-    history.value = [result, ...history.value].slice(0, 5)
     latest.value = result
+    question.value = ''
   }
   catch (e) {
     error.value = e instanceof Error ? e.message : 'Agent 执行失败'
@@ -205,6 +197,10 @@ async function submit() {
   finally {
     loading.value = false
   }
+}
+
+function focusChunk(chunkId: number) {
+  document.getElementById(`agent-chunk-${chunkId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
 
 function docTypeLabel(type: string) {
@@ -255,7 +251,6 @@ h3 {
 .quote,
 .step-card p,
 .chunk p,
-.history-item p,
 .path {
   color: var(--muted);
 }
@@ -312,12 +307,13 @@ textarea {
   min-height: 120px;
 }
 
-.actions {
-  margin-top: 16px;
+.actions,
+.section-head {
   display: flex;
   gap: 14px;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: space-between;
 }
 
 .primary {
@@ -344,22 +340,12 @@ textarea {
 .overview-panel,
 .steps-panel,
 .citations-panel,
-.chunks-panel,
-.history-panel {
+.chunks-panel {
   min-width: 0;
 }
 
-.overview-panel,
-.history-panel {
+.overview-panel {
   grid-column: 1 / -1;
-}
-
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-  flex-wrap: wrap;
 }
 
 .meta-pills {
@@ -383,16 +369,14 @@ textarea {
 
 .step-card,
 .cite,
-.chunk,
-.history-item {
+.chunk {
   border-top: 1px solid var(--border);
   padding: 14px 0;
 }
 
 .step-card header,
 .cite header,
-.chunk header,
-.history-item > div {
+.chunk header {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
@@ -405,6 +389,15 @@ textarea {
   background: #7dd3fc;
   border-radius: 999px;
   padding: 2px 8px;
+}
+
+.link-button {
+  border: 0;
+  background: transparent;
+  color: #7dd3fc;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
 }
 
 .status {
@@ -426,15 +419,9 @@ textarea {
 .quote,
 .chunk p,
 .step-card p,
-.history-item p,
 .overview {
   white-space: pre-wrap;
   margin: 8px 0 0;
-}
-
-.history-item {
-  border-top: 1px solid var(--border);
-  padding: 14px 0;
 }
 
 .error {

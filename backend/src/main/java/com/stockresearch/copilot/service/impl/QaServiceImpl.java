@@ -1,15 +1,19 @@
 package com.stockresearch.copilot.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.stockresearch.copilot.common.enums.CitationRefType;
 import com.stockresearch.copilot.common.enums.DocType;
 import com.stockresearch.copilot.config.AppProperties;
 import com.stockresearch.copilot.dto.QaAskRequest;
+import com.stockresearch.copilot.dto.QuestionQueryRequest;
 import com.stockresearch.copilot.entity.Citation;
+import com.stockresearch.copilot.entity.Company;
 import com.stockresearch.copilot.entity.Document;
 import com.stockresearch.copilot.entity.DocumentChunk;
 import com.stockresearch.copilot.entity.Question;
 import com.stockresearch.copilot.mapper.CitationMapper;
+import com.stockresearch.copilot.mapper.CompanyMapper;
 import com.stockresearch.copilot.mapper.DocumentMapper;
 import com.stockresearch.copilot.mapper.QuestionMapper;
 import com.stockresearch.copilot.rag.context.ContextBuilder;
@@ -25,6 +29,7 @@ import com.stockresearch.copilot.service.support.DocumentConverters;
 import com.stockresearch.copilot.vo.CitationVO;
 import com.stockresearch.copilot.vo.DocumentChunkVO;
 import com.stockresearch.copilot.vo.QaAnswerVO;
+import com.stockresearch.copilot.vo.QuestionHistoryVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -36,6 +41,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -53,6 +59,7 @@ public class QaServiceImpl implements QaService {
 	private final ChatClient chatClient;
 	private final QuestionMapper questionMapper;
 	private final CitationMapper citationMapper;
+	private final CompanyMapper companyMapper;
 	private final DocumentMapper documentMapper;
 	private final AppProperties appProperties;
 
@@ -108,6 +115,53 @@ public class QaServiceImpl implements QaService {
 				.citations(citations)
 				.chunks(chunks)
 				.latencyMs(latency)
+				.build();
+	}
+
+	@Override
+	public com.stockresearch.copilot.common.result.PageResult<QuestionHistoryVO> history(QuestionQueryRequest request) {
+		Page<Question> page = new Page<>(request.getPageNum(), request.getPageSize());
+		LambdaQueryWrapper<Question> wrapper = new LambdaQueryWrapper<>();
+		wrapper.eq(request.getCompanyId() != null, Question::getCompanyId, request.getCompanyId())
+				.eq(StringUtils.hasText(request.getIntentType()), Question::getIntentType, request.getIntentType())
+				.ge(request.getStartDate() != null, Question::getCreatedAt, request.getStartDate())
+				.le(request.getEndDate() != null, Question::getCreatedAt, request.getEndDate())
+				.like(StringUtils.hasText(request.getKeyword()), Question::getQuestionText, request.getKeyword())
+				.orderByDesc(Question::getId);
+		Page<Question> result = questionMapper.selectPage(page, wrapper);
+		List<QuestionHistoryVO> records = result.getRecords().stream()
+				.map(this::toHistoryVO)
+				.toList();
+		return com.stockresearch.copilot.common.result.PageResult.of(records, result.getTotal(), result.getCurrent(), result.getSize());
+	}
+
+	@Override
+	public QuestionHistoryVO getHistoryById(Long questionId) {
+		Question question = questionMapper.selectById(questionId);
+		if (question == null) {
+			throw new IllegalArgumentException("question not found: " + questionId);
+		}
+		return toHistoryVO(question);
+	}
+
+	private QuestionHistoryVO toHistoryVO(Question question) {
+		Company company = question.getCompanyId() == null ? null : companyMapper.selectById(question.getCompanyId());
+		long citationCount = citationMapper.selectCount(new LambdaQueryWrapper<Citation>()
+				.eq(Citation::getRefType, CitationRefType.QUESTION.name())
+				.eq(Citation::getRefId, question.getId()));
+		return QuestionHistoryVO.builder()
+				.questionId(question.getId())
+				.question(question.getQuestionText())
+				.answer(question.getAnswerText())
+				.intentType(question.getIntentType())
+				.companyId(question.getCompanyId())
+				.companyName(company == null ? null : company.getName())
+				.stockCode(company == null ? null : company.getStockCode())
+				.preferredDocTypes(List.of())
+				.insufficientEvidence(containsInsufficientSignal(question.getAnswerText()))
+				.latencyMs(question.getLatencyMs())
+				.citationCount((int) citationCount)
+				.createdAt(question.getCreatedAt())
 				.build();
 	}
 
