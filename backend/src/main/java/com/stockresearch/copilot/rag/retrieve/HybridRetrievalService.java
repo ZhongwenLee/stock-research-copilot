@@ -1,17 +1,15 @@
 package com.stockresearch.copilot.rag.retrieve;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
-import com.stockresearch.copilot.common.enums.DocType;
-import com.stockresearch.copilot.common.enums.ProcessStatus;
-import com.stockresearch.copilot.entity.Document;
+import com.stockresearch.copilot.common.metrics.RagMetrics;
 import com.stockresearch.copilot.entity.DocumentChunk;
 import com.stockresearch.copilot.mapper.DocumentChunkMapper;
-import com.stockresearch.copilot.mapper.DocumentMapper;
 import com.stockresearch.copilot.rag.embedding.EmbeddingClient;
 import com.stockresearch.copilot.rag.intent.QuestionIntent;
 import com.stockresearch.copilot.rag.vector.VectorSearchFilter;
 import com.stockresearch.copilot.rag.vector.VectorSearchHit;
 import com.stockresearch.copilot.rag.vector.VectorStore;
+import com.stockresearch.copilot.service.ReadyDocumentLookup;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -26,8 +24,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -38,33 +36,30 @@ public class HybridRetrievalService {
 
 	private final EmbeddingClient embeddingClient;
 	private final VectorStore vectorStore;
-	private final DocumentMapper documentMapper;
 	private final DocumentChunkMapper documentChunkMapper;
+	private final ReadyDocumentLookup readyDocumentLookup;
+	private final RagMetrics ragMetrics;
 
 	public List<RetrievedChunk> retrieve(QuestionIntent intent, int recallTopK) {
-		Set<Long> documentIds = resolveDocumentIds(intent);
+		long started = System.currentTimeMillis();
+		Set<Long> documentIds = readyDocumentLookup.findReadyDocumentIds(
+				intent.getCompanyId(), intent.getPreferredDocTypes());
 		if (intent.getCompanyId() != null && documentIds.isEmpty()) {
 			log.info("no READY documents for companyId={}", intent.getCompanyId());
+			ragMetrics.recordRetrieve(System.currentTimeMillis() - started);
 			return List.of();
 		}
 
-		List<RetrievedChunk> vectorHits = vectorRecall(intent, documentIds, recallTopK);
-		List<RetrievedChunk> keywordHits = keywordRecall(intent, documentIds, recallTopK);
-		return fuse(vectorHits, keywordHits, recallTopK);
-	}
-
-	private Set<Long> resolveDocumentIds(QuestionIntent intent) {
-		LambdaQueryWrapper<Document> wrapper = new LambdaQueryWrapper<Document>()
-				.eq(Document::getProcessStatus, ProcessStatus.READY.name());
-		if (intent.getCompanyId() != null) {
-			wrapper.eq(Document::getCompanyId, intent.getCompanyId());
-		}
-		if (intent.getPreferredDocTypes() != null && !intent.getPreferredDocTypes().isEmpty()) {
-			wrapper.in(Document::getDocType, intent.getPreferredDocTypes().stream().map(DocType::name).toList());
-		}
-		return documentMapper.selectList(wrapper).stream()
-				.map(Document::getId)
-				.collect(Collectors.toCollection(HashSet::new));
+		CompletableFuture<List<RetrievedChunk>> vectorFuture = CompletableFuture.supplyAsync(
+				() -> vectorRecall(intent, documentIds, recallTopK));
+		CompletableFuture<List<RetrievedChunk>> keywordFuture = CompletableFuture.supplyAsync(
+				() -> keywordRecall(intent, documentIds, recallTopK));
+		List<RetrievedChunk> fused = fuse(vectorFuture.join(), keywordFuture.join(), recallTopK);
+		long latencyMs = System.currentTimeMillis() - started;
+		ragMetrics.recordRetrieve(latencyMs);
+		log.info("retrieve done companyId={} recallTopK={} vector+keyword fused={} latencyMs={}",
+				intent.getCompanyId(), recallTopK, fused.size(), latencyMs);
+		return fused;
 	}
 
 	private List<RetrievedChunk> vectorRecall(QuestionIntent intent, Set<Long> documentIds, int topK) {

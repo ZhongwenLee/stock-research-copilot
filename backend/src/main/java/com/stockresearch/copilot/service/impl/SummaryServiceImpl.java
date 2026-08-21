@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.stockresearch.copilot.common.enums.CitationRefType;
 import com.stockresearch.copilot.common.enums.SummaryMode;
+import com.stockresearch.copilot.common.exception.BizException;
+import com.stockresearch.copilot.common.exception.ErrorCode;
+import com.stockresearch.copilot.common.metrics.RagMetrics;
 import com.stockresearch.copilot.config.AppProperties;
 import com.stockresearch.copilot.dto.SummaryGenerateRequest;
 import com.stockresearch.copilot.dto.SummaryQueryRequest;
@@ -63,78 +66,94 @@ public class SummaryServiceImpl implements SummaryService {
 	private final CitationMapper citationMapper;
 	private final DocumentMapper documentMapper;
 	private final AppProperties appProperties;
+	private final RagMetrics ragMetrics;
 
 	@Override
 	@Transactional
 	public SummaryAnswerVO generate(SummaryGenerateRequest request) {
 		long started = System.currentTimeMillis();
-		Company company = companyMapper.selectById(request.getCompanyId());
-		if (company == null) {
-			throw new IllegalArgumentException("company not found: " + request.getCompanyId());
+		try {
+			Company company = companyMapper.selectById(request.getCompanyId());
+			if (company == null) {
+				throw new IllegalArgumentException("company not found: " + request.getCompanyId());
+			}
+
+			SummaryMode mode = request.getMode() == null ? SummaryMode.FAST : request.getMode();
+			QuestionIntent intent = QuestionIntent.builder()
+					.intentType(com.stockresearch.copilot.common.enums.IntentType.SUMMARY)
+					.companyId(company.getId())
+					.companyName(company.getName())
+					.stockCode(StringUtils.hasText(request.getStockCode()) ? request.getStockCode() : company.getStockCode())
+					.preferredDocTypes(request.getDocTypes() == null ? List.of() : request.getDocTypes().stream()
+							.map(com.stockresearch.copilot.common.enums.DocType::from)
+							.toList())
+					.rawQuestion("请生成公司研究摘要")
+					.build();
+
+			int topK = request.getTopK() == null
+					? SummaryTemplateDefaults.topK(mode)
+					: Math.max(1, Math.min(request.getTopK(), 20));
+
+			List<RetrievedChunk> aggregated = summaryAggregationService.aggregate(
+					intent,
+					request.getStartDate(),
+					request.getEndDate(),
+					request.getDocTypes(),
+					topK * 3);
+			List<RetrievedChunk> ranked = heuristicRerankService.rerank(intent.getRawQuestion(), aggregated, topK);
+			SummaryContext summaryContext = summaryContextBuilder.build(intent, ranked, mode);
+
+			long generateStarted = System.currentTimeMillis();
+			String answer = chatClient.chat(summaryContext.getSystemPrompt(), summaryContext.getUserPrompt());
+			ragMetrics.recordGenerate(System.currentTimeMillis() - generateStarted);
+
+			List<SummarySectionVO> sections = buildSections(answer, summaryContext.getTemplate().getSections());
+			List<CitationVO> citations = buildCitations(answer, summaryContext.getUsedChunks());
+			List<DocumentChunkVO> chunks = summaryContext.getUsedChunks().stream()
+					.map(RetrievedChunk::getChunk)
+					.filter(chunk -> chunk != null)
+					.map(DocumentConverters::toChunkVO)
+					.toList();
+			boolean insufficient = summaryContext.getUsedChunks().isEmpty() || containsInsufficientSignal(answer);
+			String overview = sections.isEmpty() ? answer : sections.get(0).getContent();
+			String title = company.getName() + " " + summaryContext.getTemplate().getTitle();
+			long latency = System.currentTimeMillis() - started;
+
+			Summary summary = persist(company, request, mode, title, overview, sections, latency);
+			persistCitations(summary.getId(), citations);
+			ragMetrics.markQaSuccess(insufficient);
+
+			log.info("summary done summaryId={} companyId={} mode={} recall={} used={} latencyMs={} insufficient={}",
+					summary.getId(), company.getId(), mode,
+					aggregated.size(), summaryContext.getUsedChunks().size(), latency, insufficient);
+
+			return SummaryAnswerVO.builder()
+					.summaryId(summary.getId())
+					.companyId(company.getId())
+					.companyName(company.getName())
+					.stockCode(company.getStockCode())
+					.mode(mode.name())
+					.title(title)
+					.overview(overview)
+					.sections(sections)
+					.citations(citations)
+					.chunks(chunks)
+					.docTypes(request.getDocTypes() == null ? List.of() : new ArrayList<>(request.getDocTypes()))
+					.startDate(request.getStartDate())
+					.endDate(request.getEndDate())
+					.latencyMs(latency)
+					.insufficientEvidence(insufficient)
+					.build();
 		}
-
-		SummaryMode mode = request.getMode() == null ? SummaryMode.FAST : request.getMode();
-		QuestionIntent intent = QuestionIntent.builder()
-				.intentType(com.stockresearch.copilot.common.enums.IntentType.SUMMARY)
-				.companyId(company.getId())
-				.companyName(company.getName())
-				.stockCode(StringUtils.hasText(request.getStockCode()) ? request.getStockCode() : company.getStockCode())
-				.preferredDocTypes(request.getDocTypes() == null ? List.of() : request.getDocTypes().stream()
-						.map(com.stockresearch.copilot.common.enums.DocType::from)
-						.toList())
-				.rawQuestion("请生成公司研究摘要")
-				.build();
-
-		int topK = request.getTopK() == null
-				? SummaryTemplateDefaults.topK(mode)
-				: Math.max(1, Math.min(request.getTopK(), 20));
-
-		List<RetrievedChunk> aggregated = summaryAggregationService.aggregate(
-				intent,
-				request.getStartDate(),
-				request.getEndDate(),
-				request.getDocTypes(),
-				topK * 3);
-		List<RetrievedChunk> ranked = heuristicRerankService.rerank(intent.getRawQuestion(), aggregated, topK);
-		SummaryContext summaryContext = summaryContextBuilder.build(intent, ranked, mode);
-		String answer = chatClient.chat(summaryContext.getSystemPrompt(), summaryContext.getUserPrompt());
-
-		List<SummarySectionVO> sections = buildSections(answer, summaryContext.getTemplate().getSections());
-		List<CitationVO> citations = buildCitations(answer, summaryContext.getUsedChunks());
-		List<DocumentChunkVO> chunks = summaryContext.getUsedChunks().stream()
-				.map(RetrievedChunk::getChunk)
-				.filter(chunk -> chunk != null)
-				.map(DocumentConverters::toChunkVO)
-				.toList();
-		boolean insufficient = summaryContext.getUsedChunks().isEmpty() || containsInsufficientSignal(answer);
-		String overview = sections.isEmpty() ? answer : sections.get(0).getContent();
-		String title = company.getName() + " " + summaryContext.getTemplate().getTitle();
-		long latency = System.currentTimeMillis() - started;
-
-		Summary summary = persist(company, request, mode, title, overview, sections, latency);
-		persistCitations(summary.getId(), citations);
-
-		log.info("summary done summaryId={} companyId={} mode={} recall={} used={} latencyMs={}",
-				summary.getId(), company.getId(), mode,
-				aggregated.size(), summaryContext.getUsedChunks().size(), latency);
-
-		return SummaryAnswerVO.builder()
-				.summaryId(summary.getId())
-				.companyId(company.getId())
-				.companyName(company.getName())
-				.stockCode(company.getStockCode())
-				.mode(mode.name())
-				.title(title)
-				.overview(overview)
-				.sections(sections)
-				.citations(citations)
-				.chunks(chunks)
-				.docTypes(request.getDocTypes() == null ? List.of() : new ArrayList<>(request.getDocTypes()))
-				.startDate(request.getStartDate())
-				.endDate(request.getEndDate())
-				.latencyMs(latency)
-				.insufficientEvidence(insufficient)
-				.build();
+		catch (RuntimeException ex) {
+			ragMetrics.markQaFailure();
+			String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(Locale.ROOT);
+			if (message.contains("timeout") || message.contains("connection") || message.contains("openai")) {
+				ragMetrics.markAiUnavailable("summary", ex.getMessage());
+				throw new BizException(ErrorCode.AI_UNAVAILABLE, "摘要生成服务暂不可用，请稍后重试");
+			}
+			throw ex;
+		}
 	}
 
 	@Override

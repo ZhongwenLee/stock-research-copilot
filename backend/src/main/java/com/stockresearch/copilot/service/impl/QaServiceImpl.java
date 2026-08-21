@@ -4,6 +4,9 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.stockresearch.copilot.common.enums.CitationRefType;
 import com.stockresearch.copilot.common.enums.DocType;
+import com.stockresearch.copilot.common.exception.BizException;
+import com.stockresearch.copilot.common.exception.ErrorCode;
+import com.stockresearch.copilot.common.metrics.RagMetrics;
 import com.stockresearch.copilot.config.AppProperties;
 import com.stockresearch.copilot.dto.QaAskRequest;
 import com.stockresearch.copilot.dto.QuestionQueryRequest;
@@ -62,60 +65,84 @@ public class QaServiceImpl implements QaService {
 	private final CompanyMapper companyMapper;
 	private final DocumentMapper documentMapper;
 	private final AppProperties appProperties;
+	private final RagMetrics ragMetrics;
 
 	@Override
 	@Transactional
 	public QaAnswerVO ask(QaAskRequest request) {
 		long started = System.currentTimeMillis();
-		QuestionIntent intent = intentRecognizer.recognize(
-				request.getQuestion(),
-				request.getCompanyId(),
-				request.getStockCode(),
-				request.getDocTypes());
+		try {
+			QuestionIntent intent = intentRecognizer.recognize(
+					request.getQuestion(),
+					request.getCompanyId(),
+					request.getStockCode(),
+					request.getDocTypes());
 
-		int recallTopK = appProperties.getQa().getRecallTopK();
-		int rerankTopK = request.getTopK() == null
-				? appProperties.getQa().getRerankTopK()
-				: Math.max(1, Math.min(request.getTopK(), 20));
+			int recallTopK = appProperties.getQa().getRecallTopK();
+			int rerankTopK = request.getTopK() == null
+					? appProperties.getQa().getRerankTopK()
+					: Math.max(1, Math.min(request.getTopK(), 20));
 
-		List<RetrievedChunk> recalled = hybridRetrievalService.retrieve(intent, recallTopK);
-		List<RetrievedChunk> ranked = heuristicRerankService.rerank(intent.getRawQuestion(), recalled, rerankTopK);
-		PromptContext promptContext = contextBuilder.build(intent, ranked);
-		String answer = chatClient.chat(promptContext.getSystemPrompt(), promptContext.getUserPrompt());
+			List<RetrievedChunk> recalled = hybridRetrievalService.retrieve(intent, recallTopK);
+			List<RetrievedChunk> ranked = heuristicRerankService.rerank(intent.getRawQuestion(), recalled, rerankTopK);
+			PromptContext promptContext = contextBuilder.build(intent, ranked);
 
-		boolean insufficient = promptContext.getUsedChunks().isEmpty()
-				|| containsInsufficientSignal(answer);
+			long generateStarted = System.currentTimeMillis();
+			String answer = chatClient.chat(promptContext.getSystemPrompt(), promptContext.getUserPrompt());
+			ragMetrics.recordGenerate(System.currentTimeMillis() - generateStarted);
 
-		List<CitationVO> citations = buildCitations(answer, promptContext.getUsedChunks());
-		List<DocumentChunkVO> chunks = promptContext.getUsedChunks().stream()
-				.map(RetrievedChunk::getChunk)
-				.filter(chunk -> chunk != null)
-				.map(DocumentConverters::toChunkVO)
-				.toList();
+			boolean insufficient = promptContext.getUsedChunks().isEmpty()
+					|| containsInsufficientSignal(answer);
 
-		long latency = System.currentTimeMillis() - started;
-		Question question = persist(intent, answer, latency, citations);
+			List<CitationVO> citations = buildCitations(answer, promptContext.getUsedChunks());
+			List<DocumentChunkVO> chunks = promptContext.getUsedChunks().stream()
+					.map(RetrievedChunk::getChunk)
+					.filter(chunk -> chunk != null)
+					.map(DocumentConverters::toChunkVO)
+					.toList();
 
-		log.info("qa done questionId={} companyId={} intent={} recalled={} used={} latencyMs={}",
-				question.getId(), intent.getCompanyId(), intent.getIntentType(),
-				recalled.size(), promptContext.getUsedChunks().size(), latency);
+			long latency = System.currentTimeMillis() - started;
+			Question question = persist(intent, answer, latency, citations);
+			ragMetrics.markQaSuccess(insufficient);
 
-		return QaAnswerVO.builder()
-				.questionId(question.getId())
-				.question(intent.getRawQuestion())
-				.answer(answer)
-				.intentType(intent.getIntentType().name())
-				.companyId(intent.getCompanyId())
-				.companyName(intent.getCompanyName())
-				.stockCode(intent.getStockCode())
-				.preferredDocTypes(intent.getPreferredDocTypes() == null
-						? List.of()
-						: intent.getPreferredDocTypes().stream().map(DocType::name).toList())
-				.insufficientEvidence(insufficient)
-				.citations(citations)
-				.chunks(chunks)
-				.latencyMs(latency)
-				.build();
+			log.info("qa done questionId={} companyId={} intent={} recalled={} used={} latencyMs={} insufficient={}",
+					question.getId(), intent.getCompanyId(), intent.getIntentType(),
+					recalled.size(), promptContext.getUsedChunks().size(), latency, insufficient);
+
+			return QaAnswerVO.builder()
+					.questionId(question.getId())
+					.question(intent.getRawQuestion())
+					.answer(answer)
+					.intentType(intent.getIntentType().name())
+					.companyId(intent.getCompanyId())
+					.companyName(intent.getCompanyName())
+					.stockCode(intent.getStockCode())
+					.preferredDocTypes(intent.getPreferredDocTypes() == null
+							? List.of()
+							: intent.getPreferredDocTypes().stream().map(DocType::name).toList())
+					.insufficientEvidence(insufficient)
+					.citations(citations)
+					.chunks(chunks)
+					.latencyMs(latency)
+					.build();
+		}
+		catch (RuntimeException ex) {
+			ragMetrics.markQaFailure();
+			if (isAiFailure(ex)) {
+				ragMetrics.markAiUnavailable("qa", ex.getMessage());
+				throw new BizException(ErrorCode.AI_UNAVAILABLE, "问答生成服务暂不可用，请稍后重试");
+			}
+			throw ex;
+		}
+	}
+
+	private boolean isAiFailure(Throwable ex) {
+		String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase(Locale.ROOT);
+		return message.contains("openai")
+				|| message.contains("embedding")
+				|| message.contains("chat")
+				|| message.contains("timeout")
+				|| message.contains("connection");
 	}
 
 	@Override

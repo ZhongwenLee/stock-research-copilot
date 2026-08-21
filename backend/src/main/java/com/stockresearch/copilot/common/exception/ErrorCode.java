@@ -19,6 +19,9 @@ public enum ErrorCode {
 	NOT_FOUND(40400, "resource not found"),
 
 	INTERNAL_ERROR(50000, "internal server error"),
+	AI_UNAVAILABLE(50301, "ai service unavailable"),
+	RETRIEVAL_FAILED(50302, "retrieval failed"),
+	INGEST_FAILED(50303, "document ingest failed"),
 	SERVICE_UNAVAILABLE(50300, "service unavailable");
 
 	private final int code;

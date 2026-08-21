@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.stockresearch.copilot.common.enums.ProcessStatus;
 import com.stockresearch.copilot.common.exception.BizException;
 import com.stockresearch.copilot.common.exception.ErrorCode;
+import com.stockresearch.copilot.common.metrics.RagMetrics;
 import com.stockresearch.copilot.config.AppProperties;
 import com.stockresearch.copilot.entity.Document;
 import com.stockresearch.copilot.entity.DocumentChunk;
@@ -18,10 +19,12 @@ import com.stockresearch.copilot.rag.vector.VectorStore;
 import com.stockresearch.copilot.service.ChunkingService;
 import com.stockresearch.copilot.service.DocumentIngestService;
 import com.stockresearch.copilot.service.FileStorageService;
+import com.stockresearch.copilot.service.ReadyDocumentLookup;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -42,6 +45,8 @@ public class DocumentIngestServiceImpl implements DocumentIngestService {
 	private final EmbeddingClient embeddingClient;
 	private final VectorStore vectorStore;
 	private final AppProperties appProperties;
+	private final RagMetrics ragMetrics;
+	private final ReadyDocumentLookup readyDocumentLookup;
 
 	@Override
 	@Async("documentIngestExecutor")
@@ -51,6 +56,7 @@ public class DocumentIngestServiceImpl implements DocumentIngestService {
 
 	@Override
 	public void ingest(Long documentId) {
+		long started = System.currentTimeMillis();
 		Document document = documentMapper.selectById(documentId);
 		if (document == null) {
 			log.warn("skip ingest, document missing id={}", documentId);
@@ -76,7 +82,10 @@ public class DocumentIngestServiceImpl implements DocumentIngestService {
 			embedAndStore(documentId);
 
 			updateStatus(documentId, ProcessStatus.READY, null);
-			log.info("document ingest ready id={} chunks={}", documentId, drafts.size());
+			readyDocumentLookup.evictAll();
+			long latencyMs = System.currentTimeMillis() - started;
+			ragMetrics.recordIngest(latencyMs);
+			log.info("document ingest ready id={} chunks={} latencyMs={}", documentId, drafts.size(), latencyMs);
 		}
 		catch (Exception ex) {
 			log.error("document ingest failed id={}", documentId, ex);
@@ -85,6 +94,8 @@ public class DocumentIngestServiceImpl implements DocumentIngestService {
 				message = message.substring(0, 1800);
 			}
 			updateStatus(documentId, ProcessStatus.FAILED, message);
+			ragMetrics.markIngestFailure(documentId, message);
+			ragMetrics.recordIngest(System.currentTimeMillis() - started);
 		}
 	}
 
@@ -115,9 +126,11 @@ public class DocumentIngestServiceImpl implements DocumentIngestService {
 		int batchSize = Math.max(1, appProperties.getIngest().getEmbeddingBatchSize());
 
 		for (int i = 0; i < chunks.size(); i += batchSize) {
+			long embedStarted = System.currentTimeMillis();
 			List<DocumentChunk> batch = chunks.subList(i, Math.min(i + batchSize, chunks.size()));
 			List<String> texts = batch.stream().map(DocumentChunk::getContent).toList();
 			List<float[]> vectors = embeddingClient.embed(texts);
+			ragMetrics.recordEmbed(System.currentTimeMillis() - embedStarted);
 			List<VectorRecord> records = new ArrayList<>(batch.size());
 			for (int j = 0; j < batch.size(); j++) {
 				DocumentChunk chunk = batch.get(j);

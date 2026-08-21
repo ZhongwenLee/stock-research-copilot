@@ -42,6 +42,16 @@ public class GlobalExceptionHandler {
 		return withTrace(ApiResponse.fail(ErrorCode.VALIDATION_FAILED, message));
 	}
 
+	@ExceptionHandler({
+			java.net.ConnectException.class,
+			java.net.SocketTimeoutException.class,
+			org.springframework.web.client.ResourceAccessException.class
+	})
+	public ApiResponse<Void> handleDependencyUnavailable(Exception ex, HttpServletRequest request) {
+		log.error("ALERT dependency_unavailable path={} message={}", request.getRequestURI(), ex.getMessage());
+		return withTrace(ApiResponse.fail(ErrorCode.SERVICE_UNAVAILABLE, "依赖服务暂不可用，请稍后重试"));
+	}
+
 	@ExceptionHandler(Exception.class)
 	public ApiResponse<Void> handleException(Exception ex, HttpServletRequest request) {
 		log.error("unhandled error path={}", request.getRequestURI(), ex);

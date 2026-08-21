@@ -3,8 +3,10 @@ package com.stockresearch.copilot.rag.rerank;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.stockresearch.copilot.entity.DocumentChunk;
 import com.stockresearch.copilot.mapper.DocumentChunkMapper;
+import com.stockresearch.copilot.common.metrics.RagMetrics;
 import com.stockresearch.copilot.rag.retrieve.RetrievedChunk;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -18,14 +20,18 @@ import java.util.Map;
 /**
  * Heuristic reranker for v1. Cloud Rerank API can replace this later.
  */
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class HeuristicRerankService {
 
 	private final DocumentChunkMapper documentChunkMapper;
+	private final RagMetrics ragMetrics;
 
 	public List<RetrievedChunk> rerank(String question, List<RetrievedChunk> candidates, int topK) {
+		long started = System.currentTimeMillis();
 		if (candidates == null || candidates.isEmpty() || topK <= 0) {
+			ragMetrics.recordRerank(System.currentTimeMillis() - started);
 			return List.of();
 		}
 		enrichChunks(candidates);
@@ -47,10 +53,14 @@ public class HeuristicRerankService {
 			scored.add(item);
 		}
 		scored.sort(Comparator.comparingDouble(RetrievedChunk::getFusedScore).reversed());
-		if (scored.size() > topK) {
-			return new ArrayList<>(scored.subList(0, topK));
-		}
-		return scored;
+		List<RetrievedChunk> result = scored.size() > topK
+				? new ArrayList<>(scored.subList(0, topK))
+				: scored;
+		long latencyMs = System.currentTimeMillis() - started;
+		ragMetrics.recordRerank(latencyMs);
+		log.info("rerank done candidates={} topK={} result={} latencyMs={}",
+				candidates.size(), topK, result.size(), latencyMs);
+		return result;
 	}
 
 	private void enrichChunks(List<RetrievedChunk> candidates) {
